@@ -29,3 +29,6 @@ dev = ["pytest", "sphinx", "qiskit_sphinx_theme"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
