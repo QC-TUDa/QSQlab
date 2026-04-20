@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qsqlab"
+version = "0.1.0"
+description = "QSQlab python library for simulation and hardware execution of Quantum System Quizzing benchmark"
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+    { name = "josé Martínez", email = "tmartnez@uni-mainz.de" }
+]
+
+license = { text = "MIT" }
+
+dependencies = [
+    "numpy>=2.0.0",
+    "matplotlib~=3.10.3",
+    "scipy>=1.15.3",
+    "qiskit>=1.1.2,<3",
+    "qiskit_aer>=0.17.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "sphinx", "qiskit_sphinx_theme"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
