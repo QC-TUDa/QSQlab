@@ -1,8 +1,11 @@
+"""post_processing file containing PostProcessing template class for 
+protocol-specific single-qubit gate analysis.
+"""
+
 import logging
 logger = logging.getLogger(__name__)
 
 import time
-import os
 import json
 import math
 import matplotlib.pyplot as plt
@@ -11,12 +14,10 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
 
-from .equations import *
-from ..exceptions import MixedDataException
+from ..exceptions import MixedDataError, UnevenDepthError, GateNotSupportedError
 from ..config.plot_config import DEFAULT_PLOT_STYLE 
 from ..config.data_config import DEFAULT_DATA_ROOT
 from ..config.backend_config import SIMULATOR_BACKENDS
-from ..config.data_config import DEFAULT_DATA_ROOT
 
 
 @dataclass(frozen=True)
@@ -65,10 +66,31 @@ class BenchmarkResult:
 
 class PostProcessing():
     """ Parent PostProcessing class
-    This class evaluates data from BenchmarkSequencer, determines survival probabilities 
-    and plots data if specified. Additionally it stores results in attribute results.
+    This class evaluates data from BenchmarkSequencer, determines survival probabilities from count 
+    data and plots if specified. Additionally it stores parameters and results in dataclass containers.
     This class is intended to be subclassed by more specific Benchmark PostProcessing types that 
     add benchmark specific calculations.
+
+    Attributes
+    ----------
+    results : BenchmarkResult
+        Result container with benchmark parameters obtained from sequencer data.
+    _backend: str | None
+        string representation of backend used to execute sequences. None if backend isn't specified.
+    _gate: str | None
+        string representation of gate implemented in sequences. None if gate isn't specified.
+    _depths: list[int]
+        list of sequence depths of specified gate in all circuits.
+    _survival_probs: list[float]
+        list of survival probabilities in circuit results. From shortest sequences to longest sequences.
+    _errors: list[float]
+        list of uncertainty in survival probabilities based on binomial errors.
+
+    Notes
+    -----
+    This class is intended as a template for protocol-specific analysis procedures.
+    As-is this class will estimate survival probabilities for sequences of increasing amounts of 
+    rx/ry/x/y gates and optionally plot them.
     """
     def __init__(self, 
                  sequencer_data: Path | list[dict] | None = None, 
@@ -122,7 +144,8 @@ class PostProcessing():
 
     @property
     def results(self) -> BenchmarkResult:
-        """ General result container for important sequencer details """
+        """Snapshot of this run's backend, gate, simulation flag, and measured
+        depths as an immutable :class:`BenchmarkResult`."""
         return BenchmarkResult( 
             backend=self._backend, 
             gate=self._gate, 
@@ -132,57 +155,81 @@ class PostProcessing():
         
     @property
     def _backend(self) -> str | None:
-        """ Backend from which count data stems """
+        """
+        Returns
+        -------
+        str | None
+            Backend name from sequencer records, or ``None`` if absent.
+        """
         return self._data[0].get("backend")
     
     @property
     def _gate(self) -> str | None:
-        """ gate or operation used in sequencer data """
+        """
+        Returns
+        -------
+        str | None
+            String representation of gate from sequencer records, or ``None`` if absent.
+        """
         return self._data[0].get("gate")
 
     @property
     def _depths(self) -> list[int]:
-        """ list of all gate depths in sequence measurements """
+        """
+        Returns
+        -------
+        list[int]
+            Sorted circuit depths (``amount_of_gates`` values) present in
+            ``self.points``, ascending.
+        """
         return sorted([k for k in self.points if k not in {"backend", "gate"}])
 
     @property
-    def survival_prob(self) -> list[float]:
-        """ list of survival probabilities for each of the sequence depths """
+    def _survival_probs(self) -> list[float]:
+        """
+        Returns
+        -------
+        list[float]
+            Survival probability at each depth in ``self._depths``, in the same
+            order (shortest sequence first).
+        """
         return [self.points[d]['survival_prob'] for d in self._depths]
 
     @property
-    def errors(self) -> list[float]:
-        """ binomial errors for survival probabilities for each of the sequence depths """
+    def _errors(self) -> list[float]:
+        """
+        Returns
+        -------
+        list[float]
+            Binomial error at each depth in ``self._depths``, in the same
+            order (shortest sequence first).
+        """
         return [self.points[d]['binomial_error'] for d in self._depths]
     
-    def _plot(self, 
-             *,
-             show: bool = True,
-             save: bool = False,
-             savefolder: str = '', 
-             savename: str = '', 
-             plot_style: dict | None = None
-             ) -> tuple[plt.Figure, plt.Axes]:
-        """Ploting method for survival probability data.
+    def _plot(
+            self, 
+            *,
+            show: bool = True,
+            save: bool = False,
+            savefolder: str = '', 
+            savename: str = '', 
+            plot_style: dict | None = None
+            ) -> tuple[plt.Figure, plt.Axes]:
+        """Plot survival probability vs. circuit depth with binomial error bars.
 
-        Parameters
-        ----------
-        show : bool, optional
-            boolean to determine if plot should be showed, by default True
-        save : bool, optional
-            boolean to determine if plot should be saved, by default False
-        savefolder : str, optional
-            folder path under which to save the plots, by default ''
-        savename : str, optional
-            file name under which to save the plots, by default ''
-        plot_style : dict | None, optional
-            optional style dictionary for config of plot, by default None
+        ...(existing Parameters section is accurate, keep as-is)...
 
         Returns
         -------
         tuple[plt.Figure, plt.Axes]
-            Both the matplotlib figure as well as the axes for further optical changes outside of 
-            after creation.
+            The created figure and axes, for further customization.
+
+        Notes
+        -----
+        The created figure is not automatically closed when ``show=True``; when
+        ``save=True`` it is closed inside :meth:`_save_plot`. Calling with both
+        ``show=True`` and ``save=True`` may display an already-closed figure —
+        this is a known open issue, not yet finalized.
         """
         style = DEFAULT_PLOT_STYLE | (plot_style or {})
 
@@ -194,8 +241,8 @@ class PostProcessing():
 
             ax.errorbar(
                 self._depths,
-                self.survival_prob,
-                yerr=self.errors,
+                self._survival_probs,
+                yerr=self._errors,
                 fmt="D",
                 markersize=4,
                 color=color,
@@ -216,13 +263,38 @@ class PostProcessing():
 
             return fig, ax
 
-    def _read(self, 
-              sequencer_data: Path | list[dict] | None = None
-              ) -> list[dict]:
-        """This reads the path of a JSONL file. If no file is given, it reads the most recent one. 
-        In the default folder path this method reads the jsonl lines until it finds a break. 
-        If there's any break separation between measurements in the same file it will read only 
-        until the break
+    def _read(
+            self, 
+            sequencer_data: Path | list[dict] | None = None
+            ) -> list[dict]:
+        """Load raw sequencer records from a JSONL file, an in-memory list, or the
+        most recently modified file in the default data directory.
+
+        Parameters
+        ----------
+        sequencer_data : Path | list[dict] | None, optional
+            - ``Path`` or ``str``: path to a JSONL file to read.
+            - ``list[dict]``: pre-loaded sequencer records, validated but not re-read.
+            - ``None`` (default): read the most recently modified ``*.jsonl`` file
+            in ``DEFAULT_DATA_ROOT``.
+
+        Returns
+        -------
+        list[dict]
+            Parsed sequencer records. Reading a file stops at the first blank line
+            or malformed JSON line (treated as a measurement-block separator), so
+            the returned list may be shorter than the file's total line count.
+
+        Raises
+        ------
+        ValueError
+            If ``sequencer_data`` is an empty list, if a provided list of dicts is
+            missing required keys, or if ``sequencer_data`` is not one of the
+            supported types.
+        FileNotFoundError
+            If ``sequencer_data`` is ``None`` and ``DEFAULT_DATA_ROOT`` doesn't
+            exist or contains no ``.jsonl`` files, or if a given path does not
+            point to an existing file.
         """
         match sequencer_data:
             case []:
@@ -231,53 +303,66 @@ class PostProcessing():
                 required_keys = {"backend", "gate", "counts", "amount_of_gates", "angles", "shots"}
                 if not all(key in first for key in required_keys):
                     raise ValueError("Data does not comply with structure of sequencer data dictionaries.")
-                else:
-                    return sequencer_data
+                return sequencer_data
             case None:
                 data_root: Path = DEFAULT_DATA_ROOT
-
                 if not data_root.exists():
                     raise FileNotFoundError(f"No data directory found at {data_root}")
-
                 jsonl_files = list(data_root.glob("*.jsonl"))
-
                 if not jsonl_files:
                     raise FileNotFoundError(f"No .jsonl files found in {data_root}, no data to read.")
-
-                # Pick most recently modified file
                 file_path = max(jsonl_files, key=lambda p: p.stat().st_mtime)
-            case str(n):
+            case Path() | str():
                 file_path = Path(sequencer_data)
-                try:
-                    with open(file_path, 'r') as f:
-                        results = []
-                        for line in f:
-                            line = line.strip()
-                            if not line: break
-                            try:
-                                jsonline = json.loads(line)
-                                results.append(jsonline)
-                            except (json.JSONDecodeError, KeyError) as e:
-                                logger.exception(f"finishing loop because of malformed line: {e}")
-                                break
-                except FileNotFoundError:
-                    logger.exception("Error: File %s doesn't exist", file_path)
-                    return None
-                except Exception as e:
-                    logger.exception(f"Unexpected error reading file", exc_info=e)
-                    return None
-                return results
+                if not file_path.is_file():
+                    raise FileNotFoundError(f"No such file: '{file_path}'")
             case _:
-                ValueError(f"Invalid parameter type: {type(sequencer_data).__name__}. expected " + 
-                           "Path | list[dict] | None")
+                raise ValueError(
+                    f"Invalid parameter type: {type(sequencer_data).__name__}. expected "
+                    "Path | list[dict] | None"
+                )
+
+        results = []
+        with open(file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    break
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    logger.exception("finishing loop because of malformed line: %s", e)
+                    break
+        return results
     
     def _determine_simulation(
             self,
             data: list[dict],
             simulation: bool | None,
             ) -> bool:
-        """ This sets the class attribute simulation. If Nothing is given, it determines if the 
-        data stems from a simulation by looking at the name of the backend.
+        """Determine whether the data stems from a simulated or hardware backend.
+
+        If ``simulation`` is explicitly given, it's returned as-is. Otherwise the
+        backend name in ``data`` is looked up against ``SIMULATOR_BACKENDS``.
+
+        Parameters
+        ----------
+        data : list[dict]
+            Sequencer records as returned by :meth:`_read`.
+        simulation : bool | None
+            Manual override; bypasses backend lookup if not ``None``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the backend is a known simulator, ``False`` otherwise.
+
+        Raises
+        ------
+        ValueError
+            If ``simulation`` is ``None`` and ``data`` is empty.
+        MixedDataError
+            If ``data`` contains records from more than one backend.
         """
         if simulation is not None:
             return simulation
@@ -287,7 +372,7 @@ class PostProcessing():
         backends = {d["backend"] for d in data}
 
         if len(backends) > 1:
-            raise MixedDataException(
+            raise MixedDataError(
                 "provided data has mixed backend measurements"
             )
 
@@ -298,19 +383,63 @@ class PostProcessing():
             self, 
             data: list[dict],
             ) -> dict[int, dict]:
-        """ This agglomerates all data and transforms it into survival probabilities for each of the
-        sequence depths.
+        """Aggregate raw counts by circuit depth and compute survival probabilities.
+
+        Groups records by ``amount_of_gates``, sums their ``'0'``/``'1'`` counts,
+        then determines which bit counts as "survival" based on the gate type:
+
+        - ``rx`` / ``ry`` with ``theta ≈ pi/2``: survival bit alternates every two
+        depths (``0`` at depths ``0 mod 4``, ``1`` at depths ``2 mod 4``).
+        - ``rx`` / ``ry`` with ``theta ≈ pi``: survival bit alternates by depth
+        parity (``0`` on even depths, ``1`` on odd).
+        - ``x`` / ``y``: survival bit alternates by depth parity, same as above.
+
+        All records are assumed to share the same gate, measurement basis, and
+        rotation angles; this is validated before aggregation.
+
+        Parameters
+        ----------
+        data : list[dict]
+            Sequencer records as returned by :meth:`_read`.
+
+        Returns
+        -------
+        dict[int, dict] | None
+            Mapping of circuit depth to a dict with keys ``'0'``, ``'1'``
+            (summed raw counts), ``survival_prob``, ``survival_counts``,
+            ``total_counts``, and ``binomial_error``. Returns ``None`` if
+            ``data`` is empty.
+
+        Raises
+        ------
+        MixedDataError
+            If records mix more than one gate, measurement basis, or rotation
+            angle (theta/phi/lambda).
+        UnevenDepthError
+            If a pi/2-rotation sequence has a depth that isn't a multiple of 2,
+            making the survival bit ambiguous.
+        GateNotSupportedError
+            If the gate is not one of ``rx``, ``ry``, ``x``, ``y``, or if an
+            ``rx``/``ry`` rotation angle is neither ``pi/2`` nor ``pi``.
         """
         points: dict = {}
-        if data==[]: return None
+        if data == []: return None
 
-        gates = {d["gate"] for d in data}
-        if len(gates) > 1:
-            raise MixedDataException(
-                "provided data has mixed gate measurements"
-            )
-        
-        depths = list({d["amount_of_gates"] for d in data})
+        gates = {d.get("gate") for d in data}
+        meas_basis = {d.get("measurement_basis") for d in data}
+        angles = {
+            "theta": set([d["angles"]["theta"] for d in data]), 
+            "phi": set([d["angles"]["phi"] for d in data]), 
+            "lam": set([d["angles"]["lam"] for d in data])
+            }
+
+        if len(gates) > 1 or len(meas_basis) > 1 or any([len(angles["theta"]) > 1, len(angles["phi"]) > 1, len(angles["lam"]) > 1]):
+            raise MixedDataError("provided data has sequences with mixed gate and/or measurement basis.")
+        angles = {
+                    "theta": next(iter(angles["theta"])), 
+                    "phi": next(iter(angles["phi"])), 
+                    "lam": next(iter(angles["lam"]))
+                    }
         
         for i in data:
             if i["amount_of_gates"] not in points.keys():
@@ -320,45 +449,71 @@ class PostProcessing():
             points[i["amount_of_gates"]]['1'] += i["counts"]['1']
 
         gate = next(iter(gates))
+        match gate:
+            case "rx" | "ry":
+                if math.isclose(angles["theta"], np.pi/2, rel_tol=1e-9, abs_tol=1e-12):
+                    for i in points.keys():
+                        if i%4 == 0: 
+                            points[i].update(
+                                {"survival_prob": points[i]['0'] / (points[i]['0'] + points[i]['1']),
+                                "survival_counts": points[i]['0'], 
+                                "total_counts": (points[i]['0'] + points[i]['1']), 
+                                "binomial_error": binomial_error(
+                                    points[i]['0'], points[i]['0'] + points[i]['1'])})
+                        elif i%2==0 and i%4!=0:
+                            points[i].update(
+                                {"survival_prob": points[i]['1'] / (points[i]['0'] + points[i]['1']), 
+                                "survival_counts": points[i]['1'], 
+                                "total_counts": (points[i]['0'] + points[i]['1']), 
+                                "binomial_error": binomial_error(
+                                    points[i]['1'], points[i]['0'] + points[i]['1'])}
+                                    )
+                        else:
+                            raise UnevenDepthError(
+                                "Sequence contains uneven number of pi/2 rotations. Cannot determine Survival probability."
+                            )
+                elif math.isclose(angles["theta"], np.pi, rel_tol=1e-9, abs_tol=1e-12):
+                    for i in points.keys():
+                        if i % 2 == 0:
+                            points[i].update({
+                                "survival_prob": points[i]['0'] / (points[i]['0'] + points[i]['1']),
+                                "survival_counts": points[i]['0'],
+                                "total_counts": points[i]['0'] + points[i]['1'],
+                                "binomial_error": binomial_error(points[i]['0'], points[i]['0'] + points[i]['1']),
+                            })
+                        else:
+                            points[i].update({
+                                "survival_prob": points[i]['1'] / (points[i]['0'] + points[i]['1']),
+                                "survival_counts": points[i]['1'],
+                                "total_counts": points[i]['0'] + points[i]['1'],
+                                "binomial_error": binomial_error(points[i]['1'], points[i]['0'] + points[i]['1']),
+                            })
+                else: 
+                    raise GateNotSupportedError(
+                        f"Angle for rotation not implemented, choose from pi/2, pi."
+                        )
+                
+            case "x" | "y":
+                for i in points.keys():
+                    if i % 2 == 0:
+                        points[i].update({
+                            "survival_prob": points[i]['0'] / (points[i]['0'] + points[i]['1']),
+                            "survival_counts": points[i]['0'],
+                            "total_counts": points[i]['0'] + points[i]['1'],
+                            "binomial_error": binomial_error(points[i]['0'], points[i]['0'] + points[i]['1']),
+                        })
+                    else:
+                        points[i].update({
+                            "survival_prob": points[i]['1'] / (points[i]['0'] + points[i]['1']),
+                            "survival_counts": points[i]['1'],
+                            "total_counts": points[i]['0'] + points[i]['1'],
+                            "binomial_error": binomial_error(points[i]['1'], points[i]['0'] + points[i]['1']),
+                        })
 
-        if gate == "rz":
-            ideals = {}
-            for i in depths:
-                for j in self._data:
-                    if j["amount_of_gates"] == i:
-                        ideals.update({i:j["ideal_counts"]})
-                        pass
-            
-            for depth in points.keys():
-                total = points[depth]['0'] + points[depth]['1']
-                
-                ideal_bit = max(ideals[depth], key=ideals[depth].get)
-                
-                survival_counts = points[depth][ideal_bit]
-                
-                points[depth].update({
-                    "survival_prob": survival_counts / total,
-                    "survival_counts": survival_counts,
-                    "total_counts": total,
-                    "binomial_error": binomial_error(survival_counts, total)
-                })
-
-        if gate == "rx" or gate == "ry":
-            for i in points.keys():
-                if i%4 == 0: 
-                    points[i].update(
-                        {"survival_prob": points[i]['0'] / (points[i]['0'] + points[i]['1']),
-                        "survival_counts": points[i]['0'], 
-                        "total_counts": (points[i]['0'] + points[i]['1']), 
-                        "binomial_error": binomial_error(
-                            points[i]['0'], points[i]['0'] + points[i]['1'])})
-                elif i%2==0 and i%4!=0:
-                    points[i].update(
-                        {"survival_prob": points[i]['1'] / (points[i]['0'] + points[i]['1']), 
-                        "survival_counts": points[i]['1'], 
-                        "total_counts": (points[i]['0'] + points[i]['1']), 
-                        "binomial_error": binomial_error(
-                            points[i]['1'], points[i]['0'] + points[i]['1'])})
+            case _:
+                raise GateNotSupportedError(
+                    f"Gate {gate} is not supported in analysis. Use from 'Rx, Ry, x, y'"
+                )
 
         return points
     
@@ -368,8 +523,22 @@ class PostProcessing():
             savepath: str | None = None,
             savename: str | None = None,
         ) -> tuple[Path, Path]:
-        """Save a matplotlib figure as PNG and PDF."""
+        """Save a matplotlib figure as both PNG and PDF, then close it.
 
+        Parameters
+        ----------
+        fig : plt.Figure
+            Figure to save.
+        savepath : str | None, optional
+            Destination directory; defaults to ``DEFAULT_DATA_ROOT / "plots"``.
+        savename : str | None, optional
+            File stem (no extension); defaults to the current timestamp.
+
+        Returns
+        -------
+        tuple[Path, Path]
+            Paths to the saved PNG and PDF files, respectively.
+        """
         timestamp = time.strftime('%d-%m-%Y_%H-%M-%S')
 
         # Base directory
@@ -392,80 +561,11 @@ class PostProcessing():
     
     def __str__(self):
         return self.results.__str__()
-    
-# class PostProcessingMultiple(PostProcessing): # TODO improve class overall
-#     def __init__(self, 
-#                  filepaths: list | None = None,  # List of n file paths
-#                  names: list = None, # names which will appear in plots
-#                  plot: bool = True, 
-#                  simulation: bool = False, 
-#                  save: bool = False, 
-#                  savefolder: str = '', 
-#                  savename: str = ''):
-        
-#         if filepaths == []:
-#             raise ValueError("Please provide at least one file path.")
-                
-#         self.filepaths = filepaths
-#         self.names = names
-#         self.simulation = simulation
 
-#         # Read data from all file paths
-#         if not filepaths: [self._read()]
-#         else: self._data = [self._read(filepath) for filepath in filepaths]
-#         self.points = [self._process_results(plot=False, data=data) for data in self._data]
-#         if plot: self.plot(save, savefolder, savename)
+def binomial_error(k, N):
+    """Standard error of a binomial proportion estimate.
 
-#     def plot(self, 
-#              save: bool = False, 
-#              savefolder: str = '', 
-#              savename: str = '',
-#              ): # TODO fix simulation bool. Make it read from the data dict what type of data it is.
-#         """Creates N subplots in a single figure."""
-#         n = len(self.points)
-
-#         cols = math.ceil(math.sqrt(n))
-#         rows = math.ceil(n / cols)
-
-#         fig, axs = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows))
-#         axs = np.atleast_1d(axs).flatten()  # SAFE for all n
-
-#         for i, (ax, points) in enumerate(zip(axs, self.points)):
-#             depths = list(points.keys())
-#             survival_prob = [points[d]['survival_prob'] for d in depths]
-
-#             if self.simulation:
-#                 ax.plot(depths, survival_prob, 'o', color="green", label="Simulated data")
-#                 title_prefix = "Simulated data"
-#             else:
-#                 ax.plot(depths, survival_prob, 'o', label="Measured data")
-#                 title_prefix = "Measured data"
-
-#             ax.set_xlabel('Circuit Depth (Number of Gates)')
-#             ax.set_ylabel('Survival Probability')
-#             ax.set_ylim(0, 1)
-#             ax.grid(True)
-#             ax.legend()
-
-#             if self.names:
-#                 ax.set_title(f"{title_prefix} - {self.names[i]}")
-#             else:
-#                 ax.set_title(title_prefix)
-
-#         # Hide unused axes
-#         for ax in axs[n:]:
-#             ax.axis("off")
-
-#         plt.tight_layout()
-
-#         if save: self._save_plot(fig, savefolder=savefolder, savename=savename)
-
-
-# allowed_angles = [np.pi/2, np.pi] TODO write this in PostProcessing
-        # if angle not in allowed_angles:
-        #     raise ValueError(f"Unsupported angle '{angle}'. Choose from {allowed_angles}")
-
-# if depth%2 != 0 and angle == np.pi/2:  TODO put this in PostProcessing
-        #     raise UnevenDepth("Cannot handle sequences of uneven depth for .")
-
-# TODO write angles in sequencer data and make custom errors with it.
+    Equivalent to ``sqrt(p * (1 - p) / N)`` where ``p = k / N``, rewritten in
+    terms of raw counts.
+    """
+    return np.sqrt((k/N**2) - (k**2/N**3))

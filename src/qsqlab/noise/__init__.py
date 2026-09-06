@@ -1,2 +1,1 @@
-from .noise_sim_base import NoisyAerSimulator
-from .noisy_quantum_circuit import UnitaryNoisyQuantumCircuit
+from .noise_sim import NoisyAerSimulator

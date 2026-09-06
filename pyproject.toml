@@ -5,26 +5,63 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qsqlab"
 version = "0.1.0"
-description = "QSQlab python library for simulation and hardware execution of Quantum System Quizzing benchmark"
+description = "QSQlab python library for simulation and hardware execution of Quantum System Quizzing certification protocol"
 readme = "README.md"
 requires-python = ">=3.10"
 
 authors = [
-    { name = "josé Martínez", email = "tmartnez@uni-mainz.de" }
+    { name = "José Martínez", email = "tmartnez@students.uni-mainz.de" }
 ]
 
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
+
+keywords = [
+    "qiskit",
+    "quantum-computing",
+    "certification",
+    "benchmarking",
+    "quantum-hardware",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
 
 dependencies = [
     "numpy>=2.0.0",
-    "matplotlib~=3.10.3",
+    "matplotlib>=3.8,<4",
     "scipy>=1.15.3",
     "qiskit>=1.1.2,<3",
     "qiskit_aer>=0.17.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "sphinx", "qiskit_sphinx_theme"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "sphinx", 
+    "qiskit_sphinx_theme"
+]
+notebooks = [
+    "jupyter",
+    "ipykernel",
+]
+
+[project.urls]
+Homepage = "https://github.com/QC-TUDa/QSQlab"
+Repository = "https://github.com/QC-TUDa/QSQlab"
+Issues = "https://github.com/QC-TUDa/QSQlab/issues"
+Documentation = "https://github.com/QC-TUDa/QSQlab#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]

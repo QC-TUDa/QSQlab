@@ -1,10 +1,22 @@
 # =========================== Base ============================
-class QSQLabError(Exception):
-    """ Base class for qc_benchmarking_suite errors """
-    pass
+
 
 # ====================== PostProcessing =======================
-class MixedDataException(QSQLabError):
+class PostProcessingError(Exception):
+    """Base class for PostProcessing errors.
+    """
+
+class MixedDataError(PostProcessingError):
+    """Data contains sequences of mixed gate or measurement basis.
+    """
     pass
-class UnevenDepth(QSQLabError):
+
+class UnevenDepthError(PostProcessingError):
+    """Sequence contains an uneven depth of pi/2 rotations.
+    """
+    pass
+
+class GateNotSupportedError(PostProcessingError):
+    """Gate not supported by analysis functions.
+    """
     pass

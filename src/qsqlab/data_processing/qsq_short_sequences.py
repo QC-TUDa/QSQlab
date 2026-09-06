@@ -1,22 +1,24 @@
+"""short sequence fidelity analysis file.
+"""
 import numpy as np
 
-# ============================== Sound and Robust fidelity Bounds ===============================
+# ============================== Short sequence fidelity Bounds ===============================
 
-def epsilon_k(p_0_2k: float, p_0_2k_plus_two: float, k_order: int) -> float:
-    return 1 - ((-1)**k_order)*(p_0_2k - p_0_2k_plus_two)
+def epsilon_n(p_0_n: float, p_0_n_plus_two: float, n_order: int) -> float:
+    return 1 - ((-1)**(n_order/2))*(p_0_n - p_0_n_plus_two)
 
-def error_fail_probability(successes: int, total: int) -> float:
+def binomial_error(successes: int, total: int) -> float:
     return np.sqrt(successes/total**2 - successes**2/total**3)
 
 # Analytical Lower bound
-def robust_soundness_lb_fidelity(e_0: float, e_1: float) -> float:
+def short_seq_fidelity_lb(e_0: float, e_1: float) -> float:
     f_lb = (1/3) + (2/3)*np.sqrt(1 - (np.sqrt(e_0) + np.sqrt(e_1))**2)
     return float(f_lb)
 
-def robust_state_preparation_quality(e_0: float) -> float:
+def state_prep_lb(e_0: float) -> float:
     return 1 - e_0
 
-def robust_measurement_quality(e_0: float) -> float:
+def measurement_lb(e_0: float) -> float:
     return  e_0
 
 # ========================== Classical certification of quantum gates ===========================
