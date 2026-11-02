@@ -4,3 +4,6 @@ build/
 .vscode/
 qsqlab.egg-info/
 .pytest_cache/
+notebooks/tests/
+data_dump/simulation/tests/
+data_dump/red_trap/

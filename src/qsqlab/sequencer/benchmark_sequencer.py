@@ -220,7 +220,7 @@ class BenchmarkSequencer():
             qubit: int = 0,
             *,
             qc: QuantumCircuit | None = None,
-            measurement_basis: Literal["X", "Y", "Z"] | None = None,
+            measurement_basis: Literal["X", "Y", "Z"] = "Z",
             barriers: bool = False, 
             sort_depths: bool = True,
             transpile: bool = False,
@@ -267,9 +267,9 @@ class BenchmarkSequencer():
             building circuits for this call. If omitted, the
             already-configured :attr:`qc` is used; a :class:`ValueError` is
             raised if neither is available. By default None.
-        measurement_basis : {"X", "Y", "Z"} | None, optional
-            Basis to rotate into before measurement. ``"Z"`` (or ``None``)
-            measures in the computational basis directly. By default None.
+        measurement_basis : {"X", "Y", "Z"}, optional
+            Basis to rotate into before measurement. ``"Z"``
+            measures in the computational basis directly. By default "Z".
         barriers : bool, optional
             If True, insert a barrier after each gate application (useful
             for visual inspection / preventing transpiler gate fusion
@@ -318,8 +318,9 @@ class BenchmarkSequencer():
         ValueError
             If no circuit is available (neither ``qc`` nor a previously-set
             :attr:`qc`), if ``gate`` is not a supported gate name, if a
-            required gate-parameter keyword is missing, or if
-            ``measurement_basis`` is not one of ``"X"``, ``"Y"``, ``"Z"``.
+            required gate-parameter keyword is missing, if
+            ``measurement_basis`` is not one of ``"X"``, ``"Y"``, ``"Z"``, if 
+            ``shots`` or any depth in ``depths`` is lower than 0.
  
         Notes
         -----
@@ -331,6 +332,12 @@ class BenchmarkSequencer():
         sequencer_data = []
         if sort_depths: depths = sorted(depths)
 
+        if shots < 0:
+            raise ValueError("shot number must be a positive integer")
+
+        if any(depth < 0 for depth in depths):
+            raise ValueError("depths must be positive integers")
+
         if qc is not None: 
             self.qc = qc
         elif self._qc is None and qc is None: 
@@ -341,8 +348,7 @@ class BenchmarkSequencer():
         else: 
             file_path = None
 
-        # if not append_data: TODO
-        #     self.data = []
+        gate = gate.lower()
 
         for depth in depths:
             qc, iqc = self._create_single_qubit_circuit(
@@ -358,14 +364,14 @@ class BenchmarkSequencer():
             if transpile: 
                 qc = self._transpile(qc=qc, backend=self.backend, **kwargs)
 
-            fidelity, ideal_counts = self._get_state_vector(qc, iqc)
+            fidelity, ideal_probs = self._get_state_vector(qc, iqc)
             qc.measure_all()
 
             counts = self._run_counts(qc, shots)
             
             sequencer_line = self._create_sequencer_line(
                     counts=counts, 
-                    ideal_counts=ideal_counts,
+                    ideal_probs=ideal_probs,
                     gate=gate, 
                     measurement_basis=measurement_basis, 
                     depth=depth, 
@@ -381,7 +387,7 @@ class BenchmarkSequencer():
 
         return sequencer_data
 
-    def add_transpiler_config(self, config: dict[str, Any]) -> dict[str, Any]:
+    def set_transpiler_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Replace :attr:`transpiler_config` with a copy of ``config``.
  
         Parameters
@@ -481,7 +487,7 @@ class BenchmarkSequencer():
         fidelity : float | None
             The estimated gate fidelity as described above, or ``None`` if
             no fidelity estimate is available for this backend.
-        ideal_counts : dict[str, float]
+        ideal_probs : dict[str, float]
             Dictionary with keys ``'0'`` and ``'1'`` giving the ideal
             (noiseless) probability of each outcome, rounded to 10 decimal
             places. Both keys are always present, defaulting to ``0.0`` if
@@ -495,7 +501,8 @@ class BenchmarkSequencer():
         if isinstance(self.backend, AerSimulator):
             if hasattr(self.backend, "gate_error"):
                 error: SuperOp | None = self.backend.gate_error
-                fidelity = average_gate_fidelity(error or Operator(np.eye(2)), Operator(np.eye(2)))
+                fidelity = average_gate_fidelity(
+                    error if error is not None else Operator(np.eye(2)), Operator(np.eye(2)))
             else: 
                 fidelity = average_gate_fidelity(Operator(qc), Operator(iqc))
         else: fidelity = None
@@ -518,10 +525,10 @@ class BenchmarkSequencer():
             gate: str,
             qubit: int,
             depth: int, 
-            measurement_basis: Literal["X", "Y", "Z"] | None,
+            measurement_basis: Literal["X", "Y", "Z"],
             barriers: bool,
             **gate_kwargs,
-            ) -> QuantumCircuit:
+            ) -> tuple[QuantumCircuit]:
         """Build a circuit (and its noiseless reference) of the given depth.
  
         Applies ``gate`` to ``qubit`` a total of ``depth`` times on both
@@ -546,8 +553,8 @@ class BenchmarkSequencer():
         depth : int
             Number of times to repeat the gate. ``depth=0`` returns the
             circuits unmodified (aside from any measurement-basis rotation).
-        measurement_basis : {"X", "Y", "Z"} | None
-            Basis to rotate into before measurement. ``"Z"`` or ``None``
+        measurement_basis : {"X", "Y", "Z"}
+            Basis to rotate into before measurement. ``"Z"``
             leaves the circuit as-is (computational basis); ``"X"`` appends
             an ``H`` gate; ``"Y"`` appends ``Sdg`` then ``H``.
         barriers : bool
@@ -575,28 +582,31 @@ class BenchmarkSequencer():
             gate-parameter keyword is missing for the chosen gate, or if
             ``measurement_basis`` is not one of ``"X"``, ``"Y"``, ``"Z"``.
         """
-        gate = gate.lower()
-
-        if gate not in SINGLE_QUBIT_GATES | {"sqrtx", "sqrty", "sqrtz"}:
-            raise ValueError(f"Unsupported gate '{gate}'. Choose from {SINGLE_QUBIT_GATES}")
+        if gate not in SINGLE_QUBIT_GATES - {
+            "p", "u1", "u2", "u3",} | {"sqrtx", "sqrty", "sqrtz"}:
+            raise ValueError(
+                f"Unsupported gate '{gate}'. Choose from"
+                f"{SINGLE_QUBIT_GATES - {"p", "u1", "u2", "u3",} | {
+                    "sqrtx", "sqrty", "sqrtz"}}"
+                )
         
-        ideal = qc.copy()
+        iqc = qc.copy() # ideal quantum circuit
 
         for _ in range(depth):
             if gate in {"sqrtx", "sqrty", "sqrtz"}:
                 match gate:
                     case "sqrtx":
                         getattr(qc, "rx")(np.pi/2, qubit)
-                        getattr(ideal, "rx")(np.pi/2, qubit)
+                        getattr(iqc, "rx")(np.pi/2, qubit)
                     case "sqrty":
                         getattr(qc, "ry")(np.pi/2, qubit)
-                        getattr(ideal, "ry")(np.pi/2, qubit)
+                        getattr(iqc, "ry")(np.pi/2, qubit)
                     case "sqrtz":
                         getattr(qc, "rz")(np.pi/2, qubit)
-                        getattr(ideal, "rz")(np.pi/2, qubit)
+                        getattr(iqc, "rz")(np.pi/2, qubit)
             else:
                 method = getattr(qc, gate)
-                id_method = getattr(ideal, gate)
+                id_method = getattr(iqc, gate)
                 if gate in {"rx", "ry", "p"}: 
                     theta = gate_kwargs.get("theta")
                     if theta is None: 
@@ -622,22 +632,21 @@ class BenchmarkSequencer():
             if barriers: 
                 qc.barrier()
 
-        if measurement_basis is not None: 
-            match measurement_basis:
-                case "X": 
-                    qc.h(qubit)
-                    ideal.h(qubit)
-                case "Y": 
-                    qc.sdg(qubit)
-                    ideal.sdg(qubit)
-                    qc.h(qubit)
-                    ideal.h(qubit)
-                case "Z": 
-                    pass
-                case _: raise ValueError(
-                    f"Invalid measurement basis: {measurement_basis}, choose from [X, Y, Z]")
+        match measurement_basis:
+            case "X": 
+                qc.h(qubit)
+                iqc.h(qubit)
+            case "Y": 
+                qc.sdg(qubit)
+                iqc.sdg(qubit)
+                qc.h(qubit)
+                iqc.h(qubit)
+            case "Z": 
+                pass
+            case _: raise ValueError(
+                f"Invalid measurement basis: {measurement_basis}, choose from [X, Y, Z]")
 
-        return qc, ideal
+        return qc, iqc
     
     def _run_counts(
             self, 
@@ -666,18 +675,8 @@ class BenchmarkSequencer():
         -------
         dict
             Mapping from measured bitstring to observed count.
- 
-        Raises
-        ------
-        Exception
-            Any exception raised by ``self.backend.run(...)`` or
-            ``.result()`` is re-raised unchanged (e.g. hardware/network
-            failures, invalid circuits for the target backend).
         """
-        try:
-            res = self.backend.run([qc], shots=shots).result()
-        except Exception as e:
-            raise e
+        res = self.backend.run([qc], shots=shots).result()
         
         if hasattr(res, "to_dict") and hasattr(ResultFull, "from_dict"):
             try:
@@ -691,11 +690,11 @@ class BenchmarkSequencer():
     def _create_sequencer_line(
             self, 
             counts: dict, 
-            ideal_counts: dict,
+            ideal_probs: dict,
             gate: str,
             depth: int, 
             shots: int,
-            measurement_basis: str | None,
+            measurement_basis: str,
             fidelity: float | None = None, 
             save: bool = False,
             file_path: Path | None = None,
@@ -707,7 +706,7 @@ class BenchmarkSequencer():
         ----------
         counts : dict
             Measured counts from :meth:`_run_counts`.
-        ideal_counts : dict
+        ideal_probs : dict
             Ideal (noiseless) outcome probabilities from
             :meth:`_get_state_vector`.
         gate : str
@@ -717,9 +716,9 @@ class BenchmarkSequencer():
             the ``"amount_of_gates"`` key.
         shots : int
             Number of shots used for this circuit.
-        measurement_basis : str | None
+        measurement_basis : str
             Measurement basis used for this circuit (``"X"``, ``"Y"``,
-            ``"Z"``, or ``None``).
+            ``"Z"``).
         fidelity : float | None, optional
             Estimated gate fidelity from :meth:`_get_state_vector`, or
             ``None`` if unavailable for the current backend. By default
@@ -742,13 +741,13 @@ class BenchmarkSequencer():
             The assembled result record, with keys:
  
             - ``"counts"``: measured counts (``dict``)
-            - ``"ideal_counts"``: ideal outcome probabilities (``dict``)
+            - ``"ideal_probs"``: ideal outcome probabilities (``dict``)
             - ``"gate"``: gate name (``str``)
             - ``"angles"``: ``{"theta", "phi", "lam"}`` sub-dict (``None``
               if no gate-parameter keywords were supplied at all)
             - ``"amount_of_gates"``: circuit depth (``int``)
             - ``"shots"``: shots used (``int``)
-            - ``"measurement_basis"``: measurement basis (``str | None``)
+            - ``"measurement_basis"``: measurement basis (``str``)
             - ``"gate_fid"``: estimated fidelity (``float | None``)
             - ``"backend"``: class name of :attr:`backend` (``str``)
             - ``"timestamp"``: human-readable local timestamp (``str``)
@@ -756,8 +755,8 @@ class BenchmarkSequencer():
         """
         data = {
             "counts": counts,
-            "ideal_counts": ideal_counts,
-            "gate": gate,
+            "ideal_probs": ideal_probs,
+            "gate": gate, # TODO for future, change this to a list of str instead of just str
             "angles": None if not gate_kwargs else {
                 "theta": gate_kwargs.get("theta"),
                 "phi": gate_kwargs.get("phi"),
@@ -773,10 +772,10 @@ class BenchmarkSequencer():
         }
 
         if save: 
-            with open(file_path, 'a') as f:
+            with open(file_path, 'a', encoding="utf-8") as f:
                 json.dump(data, f)
                 f.write("\n")
-            logger.debug(f"data saved under {file_path}")
+            logger.debug("data saved under %s", file_path)
     
         return data
 

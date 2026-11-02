@@ -2,13 +2,12 @@
 Test suite for BenchmarkSequencer.
 """
 import json
-import time
 
 import pytest
 from qiskit import QuantumCircuit
 from qiskit.providers.backend import Backend
 
-from qsqlab.sequencer.benchmark_sequencer import BenchmarkSequencer, _filter_kwargs  # <-- adjust path
+from qsqlab.sequencer.benchmark_sequencer import BenchmarkSequencer, _filter_kwargs 
 
 
 # ---------------------------------------------------------------------------
@@ -176,15 +175,15 @@ class TestCircuitConstruction:
     def test_x_gate_depth_zero_is_identity(self, sequencer):
         """depth=0 should leave the qubit in |0>."""
         data = sequencer.run_circuits(depths=[0], shots=100, gate="x")
-        assert data[0]["ideal_counts"] == {"0": 1.0, "1": 0.0}
+        assert data[0]["ideal_probs"] == {"0": 1.0, "1": 0.0}
 
     def test_x_gate_depth_one_flips_qubit(self, sequencer):
         data = sequencer.run_circuits(depths=[1], shots=100, gate="x")
-        assert data[0]["ideal_counts"] == {"0": 0.0, "1": 1.0}
+        assert data[0]["ideal_probs"] == {"0": 0.0, "1": 1.0}
 
     def test_x_gate_depth_two_is_identity_again(self, sequencer):
         data = sequencer.run_circuits(depths=[2], shots=100, gate="x")
-        assert data[0]["ideal_counts"] == {"0": 1.0, "1": 0.0}
+        assert data[0]["ideal_probs"] == {"0": 1.0, "1": 0.0}
 
 
 # ---------------------------------------------------------------------------

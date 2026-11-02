@@ -2,7 +2,7 @@ DEFAULT_PLOT_STYLE = {
                     "font.serif": ["Times New Roman"],
                     "mathtext.fontset": "cm",
                     "font.size": 9,
-                    "axes.labelsize": 10,
+                    "axes.labelsize": 18,
                     "axes.titlesize": 10,
                     "xtick.labelsize": 9,
                     "ytick.labelsize": 9,

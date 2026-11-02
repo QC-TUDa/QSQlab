@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qsqlab"
-version = "0.1.0"
+version = "0.2.0"
 description = "QSQlab python library for simulation and hardware execution of Quantum System Quizzing certification protocol"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,6 +38,7 @@ classifiers = [
 
 dependencies = [
     "numpy>=2.0.0",
+    "pandas>=3",
     "matplotlib>=3.8,<4",
     "scipy>=1.15.3",
     "qiskit>=1.1.2,<3",
